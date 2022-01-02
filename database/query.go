@@ -25,27 +25,29 @@ var (
 
 // Basic CRUD SQL templates (Postgres).
 const (
-	insertSQL           = "INSERT INTO %s (%%s) VALUES (%%s)"
-	selectWhereSQL      = "SELECT %s FROM %s WHERE %s"
-	selectWherePagedSQL = "SELECT %[1]s FROM (SELECT %[1]s, RANK() OVER (ORDER BY %[2]s) ranking FROM %[3]s WHERE %[4]s) x " +
-		"WHERE ranking >=%%s AND ranking < %%s"
+	insertSQL         = "INSERT INTO %s (%%s) VALUES (%%s)"
 	selectAllSQL      = "SELECT %s FROM %s"
 	selectAllPagedSQL = "SELECT %[1]s FROM (SELECT %[1]s, RANK() OVER (ORDER BY %[2]s) ranking FROM %[3]s) x " +
-		"WHERE ranking >=%%s AND ranking < %%s"
+		"WHERE ranking >%%d AND ranking <= %%d"
+	selectWhereSQL      = "SELECT %s FROM %s WHERE %%s"
+	selectWherePagedSQL = "SELECT %[1]s FROM (SELECT %[1]s, RANK() OVER (ORDER BY %%s) ranking FROM %[2]s WHERE %%s) x " +
+		"WHERE ranking >%%d AND ranking <= %%d"
 	updateSQL = "UPDATE %s SET (%s) = (%s) WHERE %s"
 	deleteSQL = "DELETE FROM %s WHERE %s"
 )
 
 // SQL Query names.
 const (
-	insertQuery        = "Insert"
-	selectOneQuery     = "ReadOne"
-	selectAllQuery     = "ReadAll"
-	selectAllPageQuery = "ReadAllPage"
-	//selectForeignQuery      = "ReadForeign"
-	//selectForeignPagedQuery = "ReadForeignPaged"
-	updateQuery = "Update"
-	deleteQuery = "Delete"
+	insertQuery          = "insert"
+	selectOneQuery       = "one"
+	selectAllQuery       = "all"
+	selectAllPageQuery   = "allPage"
+	selectWhereQuery     = "where"
+	selectWherePageQuery = "wherePage"
+	//selectForeignQuery      = "whereForeign"
+	//selectForeignPagedQuery = "whereForeignPaged"
+	updateQuery = "update"
+	deleteQuery = "delete"
 )
 
 type columnDef struct {
@@ -68,7 +70,7 @@ type TableDef struct {
 }
 
 type TablePage struct {
-	Start  int
+	Page   int
 	Size   int
 	Filter interface{}
 }
@@ -125,6 +127,9 @@ func NewTable(schema string, tableName string, definition interface{}) (*TableDe
 	table.queries[selectOneQuery] = table.selectOneQuery()
 	table.queries[selectAllQuery] = table.selectAllQuery()
 	table.queries[selectAllPageQuery] = table.selectAllPagedQuery()
+	table.queries[selectWhereQuery] = table.selectWhereQuery()
+	table.queries[selectWherePageQuery] = table.selectWherePagedQuery()
+
 	//table.queries[selectForeignQuery] = table.selectForeignQuery()
 	//table.queries[selectForeignPagedQuery] = table.selectForeignPagedQuery()
 	table.queries[updateQuery] = table.updateQuery()
@@ -256,9 +261,19 @@ func (t *TableDef) SelectAll(db sqlDB) (*sql.Rows, error) {
 }
 
 func (t *TableDef) SelectAllPaged(db sqlDB, page *TablePage) (*sql.Rows, error) {
-	start := page.Start * page.Size
-	end := (page.Start + 1) * page.Size
-	return db.Query(t.queries[selectAllPageQuery], start, end)
+	start := page.Page * page.Size
+	end := (page.Page + 1) * page.Size
+	return db.Query(fmt.Sprintf(t.queries[selectAllPageQuery], start, end))
+}
+
+func (t *TableDef) SelectWhere(db sqlDB, in interface{}) (*sql.Rows, error) {
+	return db.Query(t.queries[selectWhereQuery])
+}
+
+func (t *TableDef) SelectWherePaged(db sqlDB, in interface{}, page *TablePage) (*sql.Rows, error) {
+	start := page.Page * page.Size
+	end := (page.Page + 1) * page.Size
+	return db.Query(fmt.Sprintf(t.queries[selectAllPageQuery], start, end))
 }
 
 //func (t *TableDef) SelectByForeignKey(db sqlDB, in interface{}) (*sql.Rows, error) {
@@ -279,8 +294,8 @@ func (t *TableDef) SelectAllPaged(db sqlDB, page *TablePage) (*sql.Rows, error) 
 //		return nil, ErrUndefinedFK
 //	}
 //	allFkCols := append(t.fkColumns, t.fpkColumns...)
-//	start := page.Start * page.Size
-//	end := (page.Start + 1) * page.Size
+//	start := page.Page * page.Size
+//	end := (page.Page + 1) * page.Size
 //	_, columnValues, err := t.columnValues(in, allFkCols)
 //	if err != nil {
 //		return nil, err
@@ -347,7 +362,7 @@ func (t *TableDef) insertQuery() string {
 func (t *TableDef) selectOneQuery() string {
 	allCols := strings.Join(t.allColumns, ",")
 	allPkCols := append(t.fpkColumns, t.pkColumns...)
-	query := fmt.Sprintf(selectWhereSQL, allCols, t.name, wherePlaceHolders(allPkCols))
+	query := fmt.Sprintf(fmt.Sprintf(selectWhereSQL, allCols, t.name), wherePlaceHolders(allPkCols))
 	log.Printf("Generated query: %s", query)
 	return query
 }
@@ -367,13 +382,28 @@ func (t *TableDef) selectAllPagedQuery() string {
 	return query
 }
 
+func (t *TableDef) selectWhereQuery() string {
+	allCols := strings.Join(t.allColumns, ",")
+	query := fmt.Sprintf(selectWhereSQL, allCols, t.name)
+	log.Printf("Generated query: %s", query)
+	return query
+}
+
+func (t *TableDef) selectWherePagedQuery() string {
+	allCols := strings.Join(t.allColumns, ",")
+	allFpkCols := strings.Join(append(t.fkColumns, t.pkColumns...), ",")
+	query := fmt.Sprintf(selectWherePagedSQL, allCols, allFpkCols, t.name)
+	log.Printf("Generated query: %s", query)
+	return query
+}
+
 func (t *TableDef) selectForeignQuery() string {
 	allCols := strings.Join(t.allColumns, ",")
 	allFkCols := append(t.fkColumns, t.fpkColumns...)
 	if len(allFkCols) == 0 {
 		return ""
 	}
-	query := fmt.Sprintf(selectWhereSQL, allCols, t.name, wherePlaceHolders(allFkCols))
+	query := fmt.Sprintf(fmt.Sprintf(selectWhereSQL, allCols, t.name), wherePlaceHolders(allFkCols))
 	log.Printf("Generated query: %s", query)
 	return query
 }

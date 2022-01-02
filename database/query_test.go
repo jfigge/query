@@ -91,8 +91,8 @@ var (
 		`"c1"`: {fieldName: "P1", primaryKey: true, foreignKey: false},
 		`"c2"`: {fieldName: "P2", primaryKey: false, foreignKey: false},
 	}
-	page1 = &TablePage{Start: 0, Size: 2}
-	page2 = &TablePage{Start: 1, Size: 2}
+	page1 = &TablePage{Page: 0, Size: 2}
+	page2 = &TablePage{Page: 1, Size: 2}
 )
 
 func Test_NewTable(t *testing.T) {
@@ -181,15 +181,15 @@ func Test_ReadAll(t *testing.T) {
 			structure:       test1{},
 			page:            page1,
 			expectedErr:     nil,
-			expectedQuery:   `SELECT "p1","c2","c3","c4" FROM (SELECT "p1","c2","c3","c4", RANK() OVER (ORDER BY "c4","c2","c3") ranking FROM "schema"."table") x WHERE ranking >=%s AND ranking < %s`,
-			expectedColumns: []interface{}{0, 2},
+			expectedQuery:   `SELECT "p1","c2","c3","c4" FROM (SELECT "p1","c2","c3","c4", RANK() OVER (ORDER BY "c4","c2","c3") ranking FROM "schema"."table") x WHERE ranking >=0 AND ranking < 2`,
+			expectedColumns: nil,
 		},
 		"Page 2": {
 			structure:       test1{},
 			page:            page2,
 			expectedErr:     nil,
-			expectedQuery:   `SELECT "p1","c2","c3","c4" FROM (SELECT "p1","c2","c3","c4", RANK() OVER (ORDER BY "c4","c2","c3") ranking FROM "schema"."table") x WHERE ranking >=%s AND ranking < %s`,
-			expectedColumns: []interface{}{2, 4},
+			expectedQuery:   `SELECT "p1","c2","c3","c4" FROM (SELECT "p1","c2","c3","c4", RANK() OVER (ORDER BY "c4","c2","c3") ranking FROM "schema"."table") x WHERE ranking >=2 AND ranking < 4`,
+			expectedColumns: nil,
 		},
 	}
 	for testName, tt := range tests {
@@ -459,5 +459,38 @@ func Test_Live(t *testing.T) {
 	assert.Equal(t, p.Float, pp.Float)
 	assert.Equal(t, p.Data, pp.Data)
 	assert.Equal(t, p.Dttm.In(time.UTC), pp.Dttm.In(time.UTC))
+	rows.Close()
 
+	if rows, err = child.SelectAll(db); err != nil {
+		t.Errorf("Failed to retrieve all child records: %v", err)
+		t.FailNow()
+	}
+	defer rows.Close()
+	for count = 0; rows.Next(); count++ {
+		if c1, err := child.ExtractRow(rows); err != nil {
+			t.Errorf("Failed to extract child row: %v", err)
+			t.FailNow()
+		} else {
+			assert.Equal(t, int(count+1), c1.(*Child).ChildId)
+		}
+	}
+	assert.Equal(t, int64(10), count)
+
+	for _, page := range []*TablePage{page1, page2} {
+		rows.Close()
+		if rows, err = child.SelectAllPaged(db, page); err != nil {
+			t.Errorf("Failed to retrieve page 1 of child records: %v", err)
+			t.FailNow()
+		}
+		for count = 0; rows.Next(); count++ {
+			if c1, err := child.ExtractRow(rows); err != nil {
+				t.Errorf("Failed to extract child row: %v", err)
+				t.FailNow()
+			} else {
+				assert.Equal(t, int(count)+(page.Page*page.Size)+1, c1.(*Child).ChildId)
+			}
+		}
+		rows.Close()
+		assert.Equal(t, int64(2), count)
+	}
 }
